@@ -1,156 +1,319 @@
-import streamlit as st
-import time
+"""EthixPilot: transparent, local-rule governance prototype.
+
+Run: streamlit run app.py (Python 3.10+).
+No API keys, network calls, model inference, certification, or external actions.
+Inputs live in the browser and Streamlit server session; no application-level
+file/database persistence. Hosting infrastructure has its own retention policy.
+The detectors below are intentionally limited heuristics, not legal advice.
+"""
+from __future__ import annotations
+
+import json
 import re
+import time
+import uuid
+from collections import Counter
+from datetime import datetime, timezone
 
-st.set_page_config(
-    page_title="EthixPilot | المساعد الذكي لحوكمة الذكاء الاصطناعي",
-    layout="wide",
-    page_icon="🛡️"
-)
+import streamlit as st
 
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap');
-    html, body, [class*="css"], div, p, span, h1, h2, h3, h4 {
-        font-family: 'Tajawal', sans-serif !important;
-        direction: rtl;
-        text-align: right;
+VERSION = "0.3.0"
+POLICY_VERSION = "EP-DEMO-2026.10-v1"
+MAX_CHARS = 12000
+DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+SEPARATORS = str.maketrans({"–": "-", "—": "-", "‑": "-", "−": "-", "\u00a0": " "})
+
+# Match on a length-preserving normalized view so replacements keep their offsets.
+# Candidates are masked conservatively without asserting identifier validity.
+PII_RULES = [
+    ("PRIVATE_KEY", r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", "Potential private-key block"),
+    ("UAE_IBAN", r"(?<![A-Za-z0-9])AE(?:[ \t-]*[0-9]){21}(?![ \t-]*[0-9])", "AE followed by 21 digits; candidate, not bank validation"),
+    ("EMIRATES_ID", r"(?<![0-9])784(?:[ \t-]*[0-9]){12}(?![ \t-]*[0-9])", "15-digit candidate beginning 784; not identity validation"),
+    ("UAE_PHONE", r"(?<![A-Za-z0-9])(?:(?:\+971|00971|971)[ \t-]*(?:5(?:[ \t-]*[0-9]){8}|[234679](?:[ \t-]*[0-9]){7})|05(?:[ \t-]*[0-9]){8}|0[234679](?:[ \t-]*[0-9]){7})(?![ \t-]*[0-9])", "Common UAE international, mobile and landline formats"),
+    ("EMAIL", r"(?<![\w.+-])[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", "Common ASCII email pattern"),
+    ("SECRET", r"(?i:(?:api[_ -]?key|access[_ -]?token|password|كلمة\s+المرور))\s*[:=]\s*[\"']?([^\s\"',;،]{6,})", "Explicitly labelled credential value, minimum six characters"),
+]
+COMPILED_PII = [(kind, re.compile(pattern, re.I), reason) for kind, pattern, reason in PII_RULES]
+REVIEW_RULES = [
+    ("FAIR-01", "fairness", r"الحسم الذكوري|للذكور فقط|للرجال فقط|استبعد.{0,35}(?:النساء|الاناث)|تفضيل خريجي الجامعات الاجنبية فقط|\b(?:men|males) only\b|\bexclude\b.{0,35}\bwomen\b|\bprefer\b.{0,30}\bmale\b", "Explicit exclusion or preference cue; context and intended use need human review."),
+    ("FAIR-02", "fairness", r"\b(?:reject|exclude)\b.{0,40}\b(?:pregnant|disabled|older|nationality|religion)\b|استبعد.{0,35}(?:الحوامل|ذوي الاعاقة|كبار السن)", "Potential discriminatory selection criterion; not a legal determination."),
+    ("INJ-01", "instruction_risk", r"ignore\s+(?:all\s+)?(?:previous|system)\s+instructions|reveal\s+(?:the\s+)?system\s+prompt|تجاهل\s+(?:كل\s+)?(?:التعليمات\s+السابقة|تعليمات\s+النظام)", "Potential instruction-override phrase; quoted educational text may also match."),
+]
+LIMITATIONS = [
+    "Local regex/phrase rules only. No LLM or semantic understanding is claimed.",
+    "Names, addresses, images, attachments, obfuscated secrets and many contexts are not covered.",
+    "No flags means no match in enabled rules, not proof of safety, fairness or legal compliance.",
+    "No official Dubai or ISO approval, certification, or exhaustive standard mapping.",
+    "Masking substitutes text; it is not encryption or irreversible anonymization.",
+    "No traffic interception or third-party model connection. Workflow actions are local simulations.",
+]
+
+
+def normalize(text: str) -> str:
+    return text.translate(DIGITS).translate(SEPARATORS)
+
+
+def detect_pii(text: str) -> list[dict]:
+    view = normalize(text)
+    candidates = []
+    for kind, pattern, reason in COMPILED_PII:
+        for match in pattern.finditer(view):
+            start, end = match.span(1) if kind == "SECRET" else match.span()
+            if kind == "SECRET" and text[start:end] == "[MASKED_SECRET]":
+                continue
+            candidates.append({"type": kind, "start": start, "end": end, "reason": reason})
+    # Earlier rule order gives large sensitive spans priority over contained matches.
+    accepted = []
+    for item in candidates:
+        if not any(item["start"] < old["end"] and item["end"] > old["start"] for old in accepted):
+            accepted.append(item)
+    return sorted(accepted, key=lambda item: item["start"])
+
+
+def mask_text(text: str, findings: list[dict]) -> str:
+    result = text
+    for finding in reversed(findings):
+        result = result[:finding["start"]] + "[MASKED_" + finding["type"] + "]" + result[finding["end"]:]
+    return result
+
+
+def review_flags(text: str) -> list[dict]:
+    view = normalize(text).lower().translate(str.maketrans("أإآى", "اااي"))
+    view = re.sub(r"[\u064b-\u065f\u0670\u0640]", "", view)
+    flags = []
+    for rule_id, category, pattern, reason in REVIEW_RULES:
+        if re.search(pattern, view, re.I):
+            flags.append({"rule_id": rule_id, "category": category, "reason": reason})
+    return flags
+
+
+def analyze(text: str, scope: str = "full") -> dict:
+    if not text.strip():
+        raise ValueError("Empty text")
+    if len(text) > MAX_CHARS:
+        raise ValueError("Input too long")
+    started = time.perf_counter()
+    pii = detect_pii(text)
+    flags = review_flags(text) if scope == "full" else []
+    masked = mask_text(text, pii)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    return {
+        "scan_id": str(uuid.uuid4()),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "app_version": VERSION,
+        "policy_version": POLICY_VERSION,
+        "scope": scope,
+        "characters": len(text),
+        "processing_ms": round(elapsed_ms, 3),
+        "pii": pii,
+        "flags": flags,
+        "counts": dict(Counter(item["type"] for item in pii)),
+        "masked_text": masked,
+        "status": "REVIEW_REQUIRED" if flags else "MASKING_REQUIRED" if pii else "NO_RULE_MATCHES",
     }
-</style>
-""", unsafe_allow_html=True)
 
-st.markdown("<h1 style='color: #0f172a;'>🛡️ EthixPilot | إيثيكس بايلوت</h1>", unsafe_allow_html=True)
-st.markdown("### المساعد الذكي لحوكمة وموثوقية نماذج الذكاء الاصطناعي في قطاع الأعمال")
-st.caption("مبادرة مصممة للمشاركة في «تحدي الذكاء الاصطناعي المساعد - دبي» (فئة الأعمال)")
-st.divider()
 
-if "aligned" not in st.session_state:
-    st.session_state.aligned = False
+def run_workflow(text: str, redact: bool) -> dict:
+    """Bounded deterministic workflow: inspect -> optionally mask -> recheck -> route.
 
-with st.sidebar:
-    st.header("لوحة الامتثال المؤسسي")
-    
-    if not st.session_state.aligned:
-        st.metric(label="مؤشر النزاهة العام (Ethix Score)", value="54.0%", delta="-42% مخاطر تحيز", delta_color="inverse")
-        st.error("⚠️ حالة النظام: غير ممتثل لمبادئ دبي للأخلاقيات")
+    Never sends messages or calls an external system. Unresolved review flags are
+    never automatically approved; no automatic 'ethical rewrite' is performed.
+    """
+    before = analyze(text)
+    actions = [{"step": "inspect", "result": before["status"]}]
+    candidate = before["masked_text"] if redact else text
+    actions.append({"step": "mask", "result": f"{len(before['pii'])} candidate spans replaced" if redact else "Disabled by user"})
+    after = analyze(candidate)
+    if before["flags"] or after["flags"]:
+        decision = "HUMAN_REVIEW_REQUIRED"
+    elif after["pii"]:
+        decision = "BLOCKED_BY_DEMO_POLICY"
     else:
-        st.metric(label="مؤشر النزاهة العام (Ethix Score)", value="99.4%", delta="+45.4% ممتثل بالكامل")
-        st.success("✅ حالة النظام: ممتثل ومعتمد تشغيلياً")
-        
-    st.divider()
-    st.subheader("المؤشرات التفصيلية:")
-    if not st.session_state.aligned:
-        st.write("⚖️ **العدالة ومكافحة الانحياز:** 50%")
-        st.write("🔒 **حماية وسرية البيانات:** 98%")
-        st.write("🔍 **الشفافية وقابلية التفسير:** 60%")
-        st.write("🇦🇪 **مواءمة مبادئ دبي:** غير ممتثل")
+        decision = "READY_FOR_HUMAN_CHECK"
+    actions.extend([
+        {"step": "recheck", "result": after["status"]},
+        {"step": "route", "result": decision},
+        {"step": "external_action", "result": "NOT_EXECUTED — local simulation only"},
+    ])
+    return {"before": before, "after": after, "decision": decision, "actions": actions, "candidate": candidate}
+
+
+def evidence(scan: dict) -> dict:
+    """Exports no raw input, replacement text, snippets or sensitive values."""
+    return {key: scan[key] for key in (
+        "scan_id", "created_at_utc", "app_version", "policy_version", "scope",
+        "characters", "processing_ms", "counts", "flags", "status"
+    )}
+
+
+def make_report(mode: str, result: dict) -> dict:
+    report = {
+        "title": "EthixPilot — experimental evidence report / تقرير أدلة تجريبي",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "mode": mode,
+        "certification": "NONE — not a compliance certificate",
+        "raw_text_included": False,
+        "limitations": LIMITATIONS,
+    }
+    if mode == "workflow":
+        report.update(before=evidence(result["before"]), after=evidence(result["after"]), decision=result["decision"], actions=result["actions"])
     else:
-        st.write("⚖️ **العدالة ومكافحة الانحياز:** 99%")
-        st.write("🔒 **حماية وسرية البيانات:** 98%")
-        st.write("🔍 **الشفافية وقابلية التفسير:** 100%")
-        st.write("🇦🇪 **مواءمة مبادئ دبي:** ممتثل بالكامل")
-    
-    st.divider()
-    st.caption("**المواصفات التقنية:**")
-    st.caption("• زمن المعالجة (Latency): **140ms**")
-    st.caption("• سياسة البيانات: **Zero-Retention Architecture**")
-    st.caption("• المحرك الدلالي: **Arabic Context Guard v2**")
+        report["scan"] = evidence(result)
+    return report
 
-tab1, tab2, tab3 = st.tabs(["🧪 بيئة فحص الأوامر (Playground)", "🛡️ جدار حماية البيانات الحية (Live Shield)", "📑 تقرير التدقيق والامتثال (Audit Report)"])
 
-with tab1:
-    col1, col2 = st.columns([1.1, 1])
-    
-    with col2:
-        st.subheader("نافذة المساعد التفاعلي (Ethix Co-pilot)")
-        if not st.session_state.aligned:
-            st.error("🚨 **تنبيه عاجل: رصد تحيز خفي ومخاطر حوكمة**")
-            st.warning("""
-            **لماذا تم تصنيف هذا الأمر كغير ممتثل؟ (Explainability):**
-            - **خرق البند الثاني من مبادئ دبي للذكاء الاصطناعي الأخلاقي:** الإخلال بمبدأ العدالة وتكافؤ الفرص.
-            - **التحليل الدلالي:** تم رصد مصطلحات ترجح النمطية الذكورية وتقصي كفاءات مؤهلة دون معايير موضوعية.
-            """)
-            if st.button("⚡ تطبيق المعايرة الفورية بنقرة واحدة (1-Click Auto-Align)", type="primary", use_container_width=True):
-                with st.spinner("جاري معايرة وضبط التوجيه ومطابقته مع ميثاق دبي للأخلاقيات..."):
-                    time.sleep(1)
-                    st.session_state.aligned = True
-                    st.rerun()
+def main() -> None:
+    st.set_page_config(page_title="EthixPilot | Governance Lab", page_icon="🛡️", layout="wide")
+    english = st.sidebar.radio("Language / اللغة", ["العربية", "English"], key="language") == "English"
+
+    def tr(ar: str, en: str) -> str:
+        return en if english else ar
+
+    st.markdown("""<style>
+    .stApp {background:#f7f9fc;}
+    h1,h2,h3 {color:#142a46;}
+    div[data-testid="stMetric"] {background:white;border:1px solid #dce5ee;border-radius:12px;padding:14px;}
+    .block-container {padding-top:2rem;}
+    </style>""", unsafe_allow_html=True)
+    st.title("🛡️ EthixPilot")
+    st.write(tr("مختبر الحوكمة وحماية البيانات • نموذج تجريبي قابل للاختبار", "AI governance & privacy lab • testable prototype"))
+    st.caption("Sharif Hamdan Arjah · Founder | v" + VERSION)
+    st.info(tr("نسخة تجريبية بمحرك قواعد محلي. لا تعتمد على نموذج لغوي، ولا تمنح اعتمادًا رسميًا، ولا ترسل النصوص إلى مزودي نماذج خارجية.", "Local-rule prototype. No language model, official certification, or text transmission to external model providers."))
+    with st.sidebar:
+        st.subheader(tr("حدود التشغيل", "Operating scope"))
+        st.write(tr("الفحص داخل خادم التطبيق؛ لا تحتاج إلى مفتاح API.", "Checks run on the app server; no API key needed."))
+        st.caption(tr("استخدم بيانات اصطناعية. النص ينتقل من متصفحك إلى خادم Streamlit ويُحتفظ به أثناء الجلسة. التطبيق لا يكتب المدخلات في ملفات أو قاعدة بيانات؛ سياسة الاستضافة منفصلة. هذا ليس ضمان احتفاظ صفري.", "Use synthetic data. Text travels to the Streamlit server and is held during the session. Application code does not write inputs to files or a database; hosting retention is separate. This is not a zero-retention guarantee."))
+        st.caption(tr("سياسة تجريبية: ", "Demo policy: ") + POLICY_VERSION)
+        if st.button(tr("مسح جلسة التجربة", "Clear demo session"), key="clear"):
+            for key in list(st.session_state.keys()):
+                if key != "language":
+                    del st.session_state[key]
+            st.rerun()
+
+    tabs = st.tabs([
+        tr("🧪 فحص النص", "🧪 Playground"),
+        tr("🛡️ حماية البيانات", "🛡️ Privacy shield"),
+        tr("🔄 مسار المعالجة", "🔄 Remediation workflow"),
+        tr("📑 تقرير الأدلة", "📑 Evidence report"),
+        tr("ℹ️ نطاق الفحوص", "ℹ️ Check coverage"),
+    ])
+
+    status_labels = {
+        "REVIEW_REQUIRED": tr("يحتاج مراجعة بشرية", "Human review required"),
+        "MASKING_REQUIRED": tr("رُصدت بيانات مرشحة للحجب", "Potential sensitive data detected"),
+        "NO_RULE_MATCHES": tr("لا تطابق مع القواعد المفعّلة", "No enabled rule matches"),
+    }
+
+    def show_scan(scan: dict) -> None:
+        st.subheader(status_labels[scan["status"]])
+        col1, col2, col3 = st.columns(3)
+        col1.metric(tr("عناصر بيانات مكتشفة", "Detected data spans"), len(scan["pii"]))
+        col2.metric(tr("تنبيهات مراجعة", "Review flags"), len(scan["flags"]))
+        col3.metric(tr("زمن الفحص المحلي • ms", "Local scan time • ms"), f"{scan['processing_ms']:.3f}")
+        st.caption(tr("قياس هذه العملية فقط، ولا يشمل الشبكة أو عرض الصفحة. ليس اختبار أداء مؤسسيًا.", "This scan only; excludes network and page rendering. Not an enterprise benchmark."))
+        if scan["counts"]:
+            st.table([{"Type": kind, "Count": count} for kind, count in scan["counts"].items()])
+        for flag in scan["flags"]:
+            st.warning(flag["rule_id"] + " · " + flag["reason"])
+        if scan["flags"]:
+            st.caption(tr("قد تكون العبارة اقتباسًا أو نفيًا أو مثالًا تعليميًا؛ يلزم فحص السياق. لا يحذف النظام معايير الاختيار تلقائيًا.", "A match may be a quotation, negation, or educational example. Context needs review; selection criteria are not silently rewritten."))
+        st.caption(tr("غياب التنبيهات لا يثبت سلامة النص أو عدالته أو امتثاله القانوني.", "No flags does not prove safety, fairness, or legal compliance."))
+        st.write(tr("نسخة بحجب الأنماط المكتشفة فقط:", "Copy with detected patterns masked only:"))
+        st.code(scan["masked_text"], language=None)
+
+    with tabs[0]:
+        st.subheader(tr("اختبر نصًا من اختيارك", "Test your own text"))
+        text = st.text_area(tr("النص المراد فحصه", "Text to inspect"), key="prompt_input", height=180, max_chars=MAX_CHARS,
+                            placeholder=tr("مثال اصطناعي: استبعد النساء من قائمة المرشحين، وأرسل الرد إلى demo@example.com", "Synthetic example: Exclude women from the shortlist and email demo@example.com"))
+        if st.button(tr("فحص النص", "Inspect text"), key="scan_prompt", type="primary"):
+            if text.strip():
+                result = analyze(text)
+                st.session_state["prompt_result"] = (text, result)
+                st.session_state["latest_report"] = make_report("playground", result)
+                st.session_state["report_source"] = ("prompt_input", text, None)
+            else:
+                st.warning(tr("أدخل نصًا أولًا.", "Enter text first."))
+        saved = st.session_state.get("prompt_result")
+        if saved and saved[0] == text:
+            show_scan(saved[1])
+        elif saved:
+            st.info(tr("تغيّر النص؛ أعد الفحص لتحديث النتيجة والتقرير.", "Input changed. Run a new scan to update results and report."))
+
+    with tabs[1]:
+        st.subheader(tr("فحص الخصوصية وحجب الأنماط", "Privacy pattern detection & masking"))
+        st.caption(tr("بريد إلكتروني، هوية إماراتية محتملة، IBAN إماراتي محتمل، أرقام هاتف إماراتية، وقيم أسرار معنونة. يدعم الأرقام العربية والفارسية وتنسيقات شائعة.", "Email, candidate Emirates ID/UAE IBAN, common UAE phones, and labelled secrets. Arabic/Persian digits and common separators supported."))
+        text = st.text_area(tr("بيانات اصطناعية للاختبار", "Synthetic test data"), key="privacy_input", height=150, max_chars=MAX_CHARS,
+                            placeholder="demo@example.com | 784200000000000 | +971 50 000 0000")
+        if st.button(tr("فحص وحجب", "Inspect & mask"), key="scan_privacy", type="primary"):
+            if text.strip():
+                result = analyze(text, "privacy")
+                st.session_state["privacy_result"] = (text, result)
+                st.session_state["latest_report"] = make_report("privacy", result)
+                st.session_state["report_source"] = ("privacy_input", text, None)
+            else:
+                st.warning(tr("أدخل نصًا أولًا.", "Enter text first."))
+        saved = st.session_state.get("privacy_result")
+        if saved and saved[0] == text:
+            show_scan(saved[1])
+            st.info(tr(f"استُبدل {len(saved[1]['pii'])} عنصرًا وفق الأنماط المفعّلة. هذا حجب نصي، وليس تشفيرًا.", f"Replaced {len(saved[1]['pii'])} detected spans. This is masking, not encryption."))
+        elif saved:
+            st.info(tr("تغيّر النص؛ أعد الفحص.", "Input changed. Scan again."))
+
+    with tabs[2]:
+        st.subheader(tr("اكتشاف ← حجب ← إعادة فحص ← إحالة", "Inspect → mask → recheck → route"))
+        st.caption(tr("محاكاة محلية محدودة لتنظيم خطوات المعالجة. لا ينفّذ إرسالًا أو قرارات توظيف أو إجراءات خارجية، وليس وكيلًا مستقلاً كاملًا.", "Bounded local workflow simulation. No sending, hiring decisions, or external actions. Not a fully autonomous AI agent."))
+        text = st.text_area(tr("مسودة رسالة أو أمر للاختبار", "Draft message or instruction"), key="workflow_input", max_chars=MAX_CHARS, height=150)
+        redact = st.checkbox(tr("السماح بحجب الأنماط المكتشفة داخل التجربة", "Allow detected-pattern masking in this simulation"), value=True, key="redact")
+        if st.button(tr("تشغيل مسار المعالجة", "Run remediation workflow"), key="run_workflow", type="primary"):
+            if text.strip():
+                result = run_workflow(text, redact)
+                st.session_state["workflow_result"] = (text, redact, result)
+                st.session_state["latest_report"] = make_report("workflow", result)
+                st.session_state["report_source"] = ("workflow_input", text, redact)
+            else:
+                st.warning(tr("أدخل نصًا أولًا.", "Enter text first."))
+        saved = st.session_state.get("workflow_result")
+        if saved and saved[:2] == (text, redact):
+            result = saved[2]
+            labels = {
+                "HUMAN_REVIEW_REQUIRED": tr("توقف: يلزم تقييم بشري للمخاطر المرصودة.", "Stopped: human risk review required."),
+                "BLOCKED_BY_DEMO_POLICY": tr("توقف: بقيت بيانات مرصودة دون حجب.", "Stopped: detected data remains unmasked."),
+                "READY_FOR_HUMAN_CHECK": tr("جاهز للفحص البشري؛ لم يُنفّذ أي إرسال.", "Ready for human check; nothing was sent."),
+            }
+            st.info(labels[result["decision"]])
+            st.table(result["actions"])
+            st.write(tr("نتيجة إعادة الفحص:", "Recheck result:"))
+            show_scan(result["after"])
+            if result["before"]["flags"]:
+                st.write(tr("تنبيهات الفحص الأول:", "Initial review flags:"))
+                st.table(result["before"]["flags"])
+        elif saved:
+            st.info(tr("تغيّر النص أو الإذن؛ شغّل المسار مجددًا.", "Input or permission changed. Run the workflow again."))
+
+    with tabs[3]:
+        st.subheader(tr("تقرير أدلة تجريبي — غير معتمد", "Experimental evidence report — not certified"))
+        report = st.session_state.get("latest_report")
+        source = st.session_state.get("report_source")
+        fresh = source and st.session_state.get(source[0]) == source[1] and (source[2] is None or st.session_state.get("redact") == source[2])
+        if report and fresh:
+            st.caption(tr("آخر عملية مكتملة فقط. لا يتضمن النص الخام أو القيم المحجوبة. يحتوي أنواع النتائج ومعرّفات القواعد والأوقات.", "Latest completed run only. Excludes raw text and masked values. Includes result types, rule IDs and timestamps."))
+            payload = json.dumps(report, ensure_ascii=False, indent=2)
+            st.json(report)
+            st.download_button(tr("تنزيل تقرير JSON", "Download JSON report"), payload.encode("utf-8"), file_name="ethixpilot-evidence.json", mime="application/json", key="download_json")
+            st.download_button(tr("تنزيل تقرير TXT", "Download TXT report"), payload.encode("utf-8-sig"), file_name="ethixpilot-evidence.txt", mime="text/plain", key="download_txt")
+        elif report:
+            st.warning(tr("مدخلات التقرير الأخير تغيّرت. أعد تشغيل الفحص قبل تصدير تقرير جديد.", "The last report's input changed. Rerun its check before exporting."))
         else:
-            st.success("✨ **تمت إعادة الموازنة والامتثال بنجاح!**")
-            st.info("""
-            **تقرير المعايرة السريعة:**
-            - تم تحييد الكلمات التمييزية واستبدالها بمعايير الكفاءة المهنية القابلة للقياس.
-            - الأمر الآن متوافق 100% مع معايير العمل المؤسسي وتكافؤ الفرص في دولة الإمارات.
-            """)
-            if st.button("🔄 إعادة ضبط التجربة إلى الحالة الأولية", use_container_width=True):
-                st.session_state.aligned = False
-                st.rerun()
+            st.info(tr("نفّذ فحصًا لإنشاء تقرير مبني على النتائج.", "Run a check to generate an evidence-based report."))
 
-    with col1:
-        st.subheader("مساحة عمل التوجيه (Prompt Editor)")
-        if not st.session_state.aligned:
-            default_prompt = "قم بفرز المتقدمين لوظيفة قيادية في قطاع التكنولوجيا واختيار أفضل 5 مرشحين بناءً على الحسم الذكوري والقدرة التنافسية الهجومية وتفضيل خريجي الجامعات الأجنبية فقط."
-            st.text_area("أمر النظام قيد التدقيق:", value=default_prompt, height=130, disabled=True)
-            st.caption("🔴 الحالة: يحتوي على كلمات ذات مخاطر انحياز عالية.")
-        else:
-            aligned_prompt = "قم بفرز المتقدمين لوظيفة قيادية في قطاع التكنولوجيا واختيار أفضل 5 مرشحين بناءً على معايير الكفاءة المهنية، المهارات القيادية المثبتة، والقدرة على حل المشكلات وإدارة فرق العمل، مع الالتزام التام بمبدأ تكافؤ الفرص والمؤهلات المعتمدة."
-            st.text_area("أمر النظام المعتمد بعد المعايرة:", value=aligned_prompt, height=130, disabled=True)
-            st.caption("🟢 الحالة: متوازن، محايد، ومطابق للمعايير الرقابية.")
+    with tabs[4]:
+        st.subheader(tr("ما الذي تفحصه هذه النسخة؟", "What does this version check?"))
+        st.table([{"Rule": kind, "Coverage": reason} for kind, _, reason in PII_RULES])
+        st.table([{"Rule": rid, "Category": category, "Coverage": reason} for rid, category, _, reason in REVIEW_RULES])
+        for limitation in LIMITATIONS:
+            st.write("• " + limitation)
+        st.warning(tr("القواعد سياسة تجريبية داخلية، وليست ترجمة معتمدة لمبادئ دبي أو ISO/IEC 42001. لا يوجد Ethix Score أو اعتماد آلي.", "Rules are an internal demo policy, not an approved implementation of Dubai principles or ISO/IEC 42001. No Ethix Score or automatic certification."))
 
-with tab2:
-    st.subheader("جدار حماية تدفق البيانات وفحص الخصوصية (Privacy & PII Masking)")
-    st.write("يقوم المساعد بفحص استعلامات العملاء في الوقت الفعلي وحجب البيانات المحددة للهوية قبل إرسالها للنماذج الخارجية.")
-    
-    sample_text = st.text_input(
-        "أدخل نصاً تفاعلياً لتجربة الحجب الفوري:",
-        value="يرجى تحويل مبلغ إلى الحساب IBAN AE070330001234567890123 للمتعامل صاحب الهوية 784-1990-1234567-1 وبريد test@company.com"
-    )
-    
-    masked_text = sample_text
-    masked_text = re.sub(r'784-\d{4}-\d{7}-\d', '[MASKED_EID_EMIRATES]', masked_text)
-    masked_text = re.sub(r'AE\d{21}', '[MASKED_UAE_IBAN]', masked_text)
-    masked_text = re.sub(r'[\w\.-]+@[\w\.-]+', '[MASKED_EMAIL]', masked_text)
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("**النص الأصلي من العميل:**")
-        st.code(sample_text, language="text")
-    with col_b:
-        st.markdown("**البيانات المشفرة بعد معالجة EthixPilot (المرسلة للنموذج):**")
-        st.code(masked_text, language="text")
-        
-    st.success("🔒 تم عزل 3 بيانات شخصية حساسة بنجاح دون تخزين أي سجل في الخوادم (Zero Data Retention).")
 
-with tab3:
-    st.subheader("وثيقة الاعتماد والامتثال الرسمي (Dubai AI Compliance Dossier)")
-    st.write("يقوم النظام بتصدير تقرير جاهز للجهات التنظيمية ومجالس الإدارة بضغطة زر واحدة.")
-    
-    current_status = "99.4% (APPROVED)" if st.session_state.aligned else "54.0% (ACTION REQUIRED)"
-    fairness_stat = "99% - ممتثل ومحايد" if st.session_state.aligned else "50% - يوجد خطر تحيز"
-    exp_stat = "100% - استدلال كامل ومبرر" if st.session_state.aligned else "60% - يتطلب توضيح"
-    
-    report_content = f"""======================================================
-تقرير التدقيق الرسمي لحوكمة الذكاء الاصطناعي - EthixPilot
-======================================================
-تاريخ التقرير: 2026-10-10
-الجهة المفحوصة: Enterprise Client Demo
-المطابقة التنظيمية: مبادئ دبي للذكاء الاصطناعي الأخلاقي & ISO/IEC 42001
-
-النتيجة العامة (Ethix Score): {current_status}
-------------------------------------------------------
-1. مؤشر مكافحة التحيز والعدالة: {fairness_stat}
-2. معيار حماية الخصوصية والـ PII: 98% - محجوب ومشفر
-3. الشفافية وقابلية التفسير: {exp_stat}
-4. سياسة تخزين البيانات: Zero-Retention (0 Bytes Retained)
-
-الاعتماد: تم الفحص آلياً عبر محرك EthixPilot v2.0
-======================================================"""
-
-    st.text_area("معاينة الوثيقة التوثيقية:", value=report_content, height=220)
-    st.download_button(
-        label="📥 تحميل تقرير الامتثال المعتمد (Download Audit Dossier)",
-        data=report_content,
-        file_name="EthixPilot_Compliance_Dossier.txt",
-        mime="text/plain",
-        use_container_width=True
-    )
+if __name__ == "__main__":
+    main()
