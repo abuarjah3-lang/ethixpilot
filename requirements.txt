@@ -1,1 +1,2 @@
-﻿streamlit
+# Python 3.10+; local mode requires no key. Optional LLM mode uses stdlib HTTPS.
+streamlit==1.50.0
