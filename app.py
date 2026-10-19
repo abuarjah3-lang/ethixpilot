@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import streamlit as st
 from pathlib import Path
 VERSION = "0.5.0"
+UI_VERSION = "0.6.0"
 POLICY_VERSION = "EP-DEMO-2026.10-v1"
 MAX_CHARS = 12000
 DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
@@ -509,14 +510,60 @@ def main():
     english = st.sidebar.radio('Language / اللغة', ['العربية', 'English'], key='language') == 'English'
     def tr(ar, en):
         return en if english else ar
-    st.markdown('''<style>.block-container{padding-top:2rem;max-width:1200px}
-    div[data-testid="stMetric"]{border:1px solid #dde5eb;border-radius:12px;padding:12px}
-    </style>''', unsafe_allow_html=True)
-   
-    st.markdown("<div style='height:12px;'></div>", unsafe_allow_html=True)
-    st.image("EthixPilot Shield Logo.png", width=260)
-    st.subheader(tr('العميل الصحيح. المعلومة الصحيحة. إذن واضح.', 'The right information. The right client. Explicit permission.'))
-    st.caption('Sharif Hamdan Arjah · Client Trust Lab · v' + VERSION)
+    # UI v0.6: presentation changes only; policy, workflows and approvals are unchanged.
+    st.markdown("""
+    <style>
+    :root { --ep-navy:#153b6d; --ep-blue:#2563ad; --ep-line:#d9e5f2; }
+    .block-container {padding-top:1.4rem; padding-bottom:3rem; max-width:1260px;}
+    [data-testid="stSidebar"] {background:linear-gradient(180deg,#f1f6fc 0%,#f8fafc 100%);}
+    [data-testid="stSidebar"] hr {border-color:#d9e5f2;}
+    .ep-header {padding:0.35rem 0 0.7rem; border-bottom:1px solid var(--ep-line); margin-bottom:1.1rem;}
+    .ep-kicker {font-size:.74rem; font-weight:750; letter-spacing:.12em; color:#3d77b5; text-transform:uppercase; margin:.15rem 0 .4rem;}
+    .ep-tagline {font-size:clamp(1.1rem,2vw,1.48rem); font-weight:750; line-height:1.7; color:var(--ep-navy); margin:0 0 .15rem;}
+    .ep-meta {font-size:.84rem; color:#5b6f87; margin-bottom:.35rem;}
+    .ep-trust {display:flex;gap:.5rem; flex-wrap:wrap; margin:.8rem 0 .9rem;}
+    .ep-trust span {border:1px solid #cadff5; border-radius:50px; color:#1a548e;
+      background:#ecf5ff; padding:.38rem .75rem; font-size:.78rem; font-weight:650;}
+    .ep-section {font-size:1.08rem; font-weight:750; color:var(--ep-navy); margin:.5rem 0 1rem;
+      border-inline-start:4px solid #2c77bf; padding-inline-start:.75rem;}
+    div[data-testid="stMetric"] {border:1px solid var(--ep-line); border-radius:13px;
+      padding:14px; background:var(--secondary-background-color);}
+    div[data-testid="stTabs"] button[role="tab"] {font-weight:650; padding:.85rem 1.05rem;}
+    div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {color:#2066ae;
+      border-bottom-color:#2066ae;}
+    div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {background-color:#2066ae;}
+    div[data-testid="stExpander"] {border-radius:12px; border-color:var(--ep-line);}
+    div.stButton > button[kind="primary"] {background-color:#2167b2; border-color:#2167b2;
+      border-radius:9px; font-weight:650;}
+    div.stButton > button[kind="primary"]:hover {background-color:#174f89; border-color:#174f89;}
+    /* Keep text legible in dark-mode layouts instead of hardcoding every text color. */
+    @media (prefers-color-scheme: dark) {
+      .ep-tagline, .ep-section {color:#d7e9ff;}
+      .ep-meta {color:#acc0d9;}
+      .ep-header {border-color:#35516e;}
+      .ep-trust span {background:#15324d; color:#d7e9ff; border-color:#35638c;}
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Resolve the brand asset relative to app.py, not the runtime working directory.
+    logo_file = Path(__file__).resolve().parent / "EthixPilot Shield Logo.png"
+    if logo_file.is_file():
+        st.image(str(logo_file), width=244)
+    else:
+        st.title("EthixPilot")  # Graceful fallback if the image is not uploaded.
+    st.markdown(
+        '<div class="ep-header">'
+        '<div class="ep-kicker">CLIENT TRUST LAB · UI v' + UI_VERSION + '</div>'
+        '<div class="ep-tagline">' + tr('العميل الصحيح. المعلومة الصحيحة. إذن واضح.',
+                                      'The right information. The right client. Explicit permission.') + '</div>'
+        '<div class="ep-meta">Sharif Hamdan Arjah · EthixPilot · Core v' + VERSION + '</div>'
+        '</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="ep-trust"><span>' + tr('بيانات اصطناعية فقط', 'Synthetic data only') + '</span>'
+        '<span>' + tr('مراجعة بشرية إلزامية', 'Human review required') + '</span>'
+        '<span>' + tr('لا إرسال خارجي', 'No external sending') + '</span></div>',
+        unsafe_allow_html=True)
     st.info(tr('مختبر ببيانات اصطناعية: يراجع صلاحية مشاركة الأدلة، ويعيد بناء رد مسموح، ثم يطلب موافقة بشرية. اختر المحاكاة المحلية أو المساعد اللغوي الاختياري. لا إرسال بريد فعلي.', 'Synthetic lab: checks evidence-sharing permissions, reconstructs a permitted reply, then requests human approval. Choose local simulation or the optional LLM selector. No real email sending.'))
     with st.sidebar:
         st.write(tr('مستشار واحد · ثلاثة عملاء', 'One consultant · three clients'))
@@ -541,7 +588,7 @@ def main():
     with tabs[0]:
         left, right = st.columns([1, 1.3])
         with left:
-            st.markdown('**' + tr('1. سياق المهمة', '1. Task context') + '**')
+            st.markdown('<div class="ep-section">' + tr('01 · سياق المهمة', '01 · Task context') + '</div>', unsafe_allow_html=True)
             client = st.selectbox(tr('عميل المهمة', 'Task client'), ['A', 'B', 'C'], key='client')
             recipient = st.selectbox(tr('المستلم من سجل الاتصال', 'Recipient from contact registry'), list(CONTACTS), format_func=lambda x: CONTACTS[x]['label'], key='recipient')
             purpose = st.selectbox(tr('الغرض المصرح', 'Authorized purpose'), PURPOSES, format_func=lambda x: {'status': tr('تحديث حالة المشروع', 'Project status'), 'commercial': tr('إرسال العرض التجاري', 'Commercial quote')}[x], key='purpose')
@@ -553,7 +600,7 @@ def main():
                    'language': 'en' if english else 'ar', 'task_note': note, 'execution_mode': mode,
                    'model': config['model'] if config else None, 'planner_version': PLANNER_VERSION}
         with right:
-            st.markdown('**' + tr('2. المستندات الاصطناعية المقترحة', '2. Proposed synthetic evidence') + '**')
+            st.markdown('<div class="ep-section">' + tr('02 · المستندات الاصطناعية المقترحة', '02 · Proposed synthetic evidence') + '</div>', unsafe_allow_html=True)
             for rid in proposal:
                 doc = docs[rid]
                 with st.expander(rid + ' · v' + str(doc['revision']), expanded=(rid == proposal[0])):
@@ -598,7 +645,7 @@ def main():
                 if run['planner']['reason_code'] != 'supported':
                     st.warning(tr('طلب النموذج مراجعة بشرية لعدم كفاية الأدلة أو تعارض المهمة. لم يُستبدل قراره بمحاكاة صامتة.', 'The model requested human review because evidence is insufficient or the task conflicts. No silent simulation fallback was used.'))
                 st.caption(tr('الزمن الكلي مع اتصال النموذج (ms): ', 'Total time including model request (ms): ') + str(run['planner']['elapsed_ms']))
-            st.markdown('**' + tr('3. القرار وإعادة بناء الرد', '3. Decision & reply reconstruction') + '**')
+            st.markdown('<div class="ep-section">' + tr('03 · القرار وإعادة بناء الرد', '03 · Decision & reply reconstruction') + '</div>', unsafe_allow_html=True)
             st.table([{tr('المصدر', 'Source'): row['source'], tr('القاعدة', 'Rule'): row['rule'], tr('السبب', 'Reason'): REASONS[row['rule']][int(english)]} for row in run['decisions']])
             if run['alternatives']:
                 st.success(tr('لم يبق دليل مسموح من المقترحات. استُرجعت بدائل من سجلات العميل المصرح بها:', 'No proposed evidence was permitted. Alternatives were retrieved from authorized client records:') + ' ' + ', '.join(run['alternatives']))
