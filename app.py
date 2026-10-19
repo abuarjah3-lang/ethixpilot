@@ -512,8 +512,9 @@ def main():
     st.markdown('''<style>.block-container{padding-top:2rem;max-width:1200px}
     div[data-testid="stMetric"]{border:1px solid #dde5eb;border-radius:12px;padding:12px}
     </style>''', unsafe_allow_html=True)
-        st.image("EthixPilot Shield Logo.png", width=200)
-    st.title('🛡️ EthixPilot')
+   
+    st.image("EthixPilot Shield Logo.png", width=200)
+    st.title('🛡️ EthixPilot') 
     st.subheader(tr('المعلومة الصحيحة. للعميل الصحيح. بإذن واضح.', 'The right information. The right client. Explicit permission.'))
     st.caption('Sharif Hamdan Arjah · Client Trust Lab · v' + VERSION)
     st.info(tr('مختبر ببيانات اصطناعية: يراجع صلاحية مشاركة الأدلة، ويعيد بناء رد مسموح، ثم يطلب موافقة بشرية. اختر المحاكاة المحلية أو المساعد اللغوي الاختياري. لا إرسال بريد فعلي.', 'Synthetic lab: checks evidence-sharing permissions, reconstructs a permitted reply, then requests human approval. Choose local simulation or the optional LLM selector. No real email sending.'))
