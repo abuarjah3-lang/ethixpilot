@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 import streamlit as st
 from pathlib import Path
 VERSION = "0.5.0"
-UI_VERSION = "0.8.0"
+UI_VERSION = "0.8.1"
 POLICY_VERSION = "EP-DEMO-2026.10-v1"
 MAX_CHARS = 12000
 DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
@@ -594,13 +594,45 @@ def main():
        div[data-testid="stVerticalBlockBorderWrapper"]:has(.ep-hero-marker) {padding:.9rem !important;}
        div[data-testid="stVerticalBlockBorderWrapper"]:has(.ep-hero-marker) .ep-hero-title {font-size:1.4rem;}
     }
+    /* v0.8.1: stable, scoped styling using Streamlit container key. */
+    .st-key-ep_hero_panel {
+      background:linear-gradient(112deg,#102946 0%,#143e65 57%,#126d80 100%) !important;
+      border:1px solid rgba(85,194,219,.55) !important;
+      border-radius:20px !important;
+      padding:1.45rem 1.65rem !important;
+      box-shadow:0 12px 34px rgba(13,42,75,.17) !important;
+      overflow:hidden;
+    }
+    .st-key-ep_hero_panel .ep-hero-kicker {color:#8fe5ed !important; font-size:.83rem !important;}
+    .st-key-ep_hero_panel .ep-hero-title {color:#fff !important; font-size:clamp(1.55rem,2.6vw,2.24rem) !important;}
+    .st-key-ep_hero_panel .ep-hero-subtitle {color:#e0f6fc !important; font-size:1.08rem !important;}
+    .st-key-ep_hero_panel .ep-hero-meta {color:#bdd7e8 !important;font-size:.86rem !important;}
+    .st-key-ep_hero_panel .ep-trust span {
+      background:rgba(88,203,220,.12) !important;
+      border:1px solid rgba(181,233,241,.4) !important;
+      color:#f0fdff !important;font-size:.82rem !important;
+    }
+    .st-key-ep_hero_panel [data-testid="stImage"] {
+      background:rgba(233,247,255,.95) !important;
+      border:1px solid rgba(206,239,246,.95) !important;
+      border-radius:15px !important;
+      padding:.4rem !important;
+      width:fit-content;
+    }
+    [data-testid="stSidebar"] p, [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .stMarkdown {font-size:1.01rem !important;line-height:1.82 !important;}
+    [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {font-size:.89rem !important;line-height:1.72 !important;}
+    @media (max-width:750px) {
+      .st-key-ep_hero_panel {padding:1rem !important;}
+      .st-key-ep_hero_panel .ep-hero-title {font-size:1.42rem !important;}
+    }
     </style>
     """, unsafe_allow_html=True)
 
     # UI v0.8: presentation-only hero refresh. Policy engine and workflow untouched.
     logo_file = Path(__file__).resolve().parent / "EthixPilot Shield Logo.png"
     st.markdown('<div class="ep-hero-anchor" aria-hidden="true"></div>', unsafe_allow_html=True)
-    with st.container(border=True):
+    with st.container(key="ep_hero_panel", border=False):
         st.markdown('<div class="ep-hero-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
         logo_col, intro_col = st.columns([1, 3.9], gap="large", vertical_alignment="center")
         with logo_col:
