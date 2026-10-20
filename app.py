@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 import streamlit as st
 from pathlib import Path
 VERSION = "0.5.0"
-UI_VERSION = "0.6.0"
+UI_VERSION = "0.8.0"
 POLICY_VERSION = "EP-DEMO-2026.10-v1"
 MAX_CHARS = 12000
 DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
@@ -514,7 +514,7 @@ def main():
     st.markdown("""
     <style>
     :root { --ep-navy:#153b6d; --ep-blue:#2563ad; --ep-line:#d9e5f2; }
-    .block-container {padding-top:1.4rem; padding-bottom:3rem; max-width:1260px;}
+    .block-container {padding-top:2.8rem; padding-bottom:3rem; max-width:1300px;}
     [data-testid="stSidebar"] {background:linear-gradient(180deg,#f1f6fc 0%,#f8fafc 100%);}
     [data-testid="stSidebar"] hr {border-color:#d9e5f2;}
     .ep-header {padding:0.35rem 0 0.7rem; border-bottom:1px solid var(--ep-line); margin-bottom:1.1rem;}
@@ -543,27 +543,85 @@ def main():
       .ep-header {border-color:#35516e;}
       .ep-trust span {background:#15324d; color:#d7e9ff; border-color:#35638c;}
     }
+    .ep-eyebrow {font-size:.73rem;letter-spacing:.17em;font-weight:800;color:#2474c3;margin-bottom:12px;}
+    .ep-hero-kicker {font-size:.73rem;letter-spacing:.1em;font-weight:800;color:#2582c8;margin-bottom:9px;}
+    .ep-hero-title {font-size:clamp(1.4rem,2.4vw,2.05rem);line-height:1.55;color:#0d356a;font-weight:850;margin-bottom:5px;}
+    .ep-hero-subtitle {font-size:1rem;line-height:1.8;color:#3a5c7d;margin-bottom:12px;}
+    .ep-hero-meta {font-size:.81rem;color:#6a7d92;margin:8px 0 14px;}
+    [data-testid="stVerticalBlockBorderWrapper"] {border-radius:18px;}
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] {font-weight:700;color:#174575;}
+    div[data-testid="stTabs"] button[role="tab"] {border-radius:9px 9px 0 0;font-size:.93rem;}
+    [data-testid="stBaseButton-primary"] {box-shadow:0 4px 14px rgba(26,104,179,.16);}
+    @media (prefers-color-scheme: dark) {
+      .ep-hero-title{color:#dbeafe;}.ep-hero-subtitle{color:#afc9e9;}
+    }
+    /* EthixPilot v0.8 branding. Applies to the hero only, not approval controls. */
+    .block-container {padding-top:1.8rem;}
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.ep-hero-marker) {
+       border:1px solid #237eaa !important;
+       border-radius:20px !important;
+       padding:1.2rem 1.45rem !important;
+       background:linear-gradient(114deg,#102c52 0%,#164976 62%,#176b87 100%) !important;
+       box-shadow:0 8px 26px rgba(12,40,70,.14);
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.ep-hero-marker) .ep-hero-kicker {
+       font-size:.76rem;letter-spacing:.09em;font-weight:800;color:#89e0ef;margin-bottom:.7rem;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.ep-hero-marker) .ep-hero-title {
+       color:#fff !important;font-size:clamp(1.45rem,2.35vw,2.1rem);line-height:1.55;font-weight:820;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.ep-hero-marker) .ep-hero-subtitle {
+       color:#e1f1ff !important;font-size:1.08rem;line-height:1.8;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.ep-hero-marker) .ep-hero-meta {color:#b9d0e5;}
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.ep-hero-marker) .ep-trust span {
+       color:#e8faff !important;background:rgba(110,210,235,.13) !important;
+       border:1px solid rgba(160,226,243,.4) !important;
+    }
+    /* The logo is a transparent PNG; the soft frost backing is part of the interface. */
+    div[data-testid="stColumn"]:has(.ep-logo-anchor) [data-testid="stImage"] {
+       background:#eaf7ff;border:1px solid #b8e1ef;border-radius:16px;
+       padding:.55rem;display:flex;justify-content:center;align-items:center;
+    }
+    div[data-testid="stColumn"]:has(.ep-logo-anchor) [data-testid="stImage"] img {
+       object-fit:contain;max-width:100%;height:auto;
+    }
+    [data-testid="stSidebar"] {background:linear-gradient(180deg,#eaf3fb 0%,#f6f9fc 100%);}
+    [data-testid="stSidebar"] p, [data-testid="stSidebar"] label {line-height:1.7;font-size:.96rem;}
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] {font-size:.99rem;font-weight:750;}
+    [data-testid="stTabs"] button[role="tab"] {font-size:1rem;}
+    @media (max-width: 750px) {
+       div[data-testid="stVerticalBlockBorderWrapper"]:has(.ep-hero-marker) {padding:.9rem !important;}
+       div[data-testid="stVerticalBlockBorderWrapper"]:has(.ep-hero-marker) .ep-hero-title {font-size:1.4rem;}
+    }
     </style>
     """, unsafe_allow_html=True)
 
-    # Resolve the brand asset relative to app.py, not the runtime working directory.
+    # UI v0.8: presentation-only hero refresh. Policy engine and workflow untouched.
     logo_file = Path(__file__).resolve().parent / "EthixPilot Shield Logo.png"
-    if logo_file.is_file():
-        st.image(str(logo_file), width=244)
-    else:
-        st.title("EthixPilot")  # Graceful fallback if the image is not uploaded.
-    st.markdown(
-        '<div class="ep-header">'
-        '<div class="ep-kicker">CLIENT TRUST LAB · UI v' + UI_VERSION + '</div>'
-        '<div class="ep-tagline">' + tr('العميل الصحيح. المعلومة الصحيحة. إذن واضح.',
-                                      'The right information. The right client. Explicit permission.') + '</div>'
-        '<div class="ep-meta">Sharif Hamdan Arjah · EthixPilot · Core v' + VERSION + '</div>'
-        '</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="ep-trust"><span>' + tr('بيانات اصطناعية فقط', 'Synthetic data only') + '</span>'
-        '<span>' + tr('مراجعة بشرية إلزامية', 'Human review required') + '</span>'
-        '<span>' + tr('لا إرسال خارجي', 'No external sending') + '</span></div>',
-        unsafe_allow_html=True)
+    st.markdown('<div class="ep-hero-anchor" aria-hidden="true"></div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown('<div class="ep-hero-marker" aria-hidden="true"></div>', unsafe_allow_html=True)
+        logo_col, intro_col = st.columns([1, 3.9], gap="large", vertical_alignment="center")
+        with logo_col:
+            st.markdown('<div class="ep-logo-anchor" aria-hidden="true"></div>', unsafe_allow_html=True)
+            if logo_file.is_file():
+                st.image(str(logo_file), width=178)
+            else:
+                st.markdown('### 🛡️ EthixPilot')
+        with intro_col:
+            st.markdown(
+                '<div class="ep-hero-kicker">ETHIXPILOT · CLIENT TRUST LAB</div>'
+                '<div class="ep-hero-title">' + tr('القرار الصحيح يبدأ بالدليل المسموح.', 'Trusted decisions start with permitted evidence.') + '</div>'
+                '<div class="ep-hero-subtitle">' + tr('العميل الصحيح. المعلومة الصحيحة. إذن واضح.', 'The right information. The right client. Explicit permission.') + '</div>'
+                '<div class="ep-hero-meta">Sharif Hamdan Arjah &nbsp;·&nbsp; UI ' + UI_VERSION + ' &nbsp;·&nbsp; Core ' + VERSION + '</div>',
+                unsafe_allow_html=True)
+            st.markdown(
+                '<div class="ep-trust"><span>' + tr('بيانات اصطناعية فقط', 'Synthetic data only') + '</span>'
+                '<span>' + tr('مراجعة بشرية إلزامية', 'Human review required') + '</span>'
+                '<span>' + tr('لا إرسال خارجي', 'No external sending') + '</span></div>',
+                unsafe_allow_html=True)
+    st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
     st.info(tr('مختبر ببيانات اصطناعية: يراجع صلاحية مشاركة الأدلة، ويعيد بناء رد مسموح، ثم يطلب موافقة بشرية. اختر المحاكاة المحلية أو المساعد اللغوي الاختياري. لا إرسال بريد فعلي.', 'Synthetic lab: checks evidence-sharing permissions, reconstructs a permitted reply, then requests human approval. Choose local simulation or the optional LLM selector. No real email sending.'))
     with st.sidebar:
         st.write(tr('مستشار واحد · ثلاثة عملاء', 'One consultant · three clients'))
